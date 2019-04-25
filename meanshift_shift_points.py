@@ -33,9 +33,15 @@ class Meanshifter:
             shifted = np.zeros((h,w,shape[1]))
             allPoints = inputFeature[batch,:,:,:].transpose().reshape(-1,shape[1])
             allClasses = inputClass[batch,:,:].reshape(-1)
+            labled = np.zeros((h,w))     #mark if the point has been assign to a class or not
             print('batch: %d'%batch)
+            currentClass = 1     #class 0 is background
             for x in range(h):
                 for y in range(w):
+                    if (labled[x,y] != 0):
+                        continue
+                    labled[x,y] = 1
+                    output[batch,x,y] = currentClass
                     print("point: %d,%d"%(x,y))
                     if (inputClass[batch,x,y] == 0):
                         continue
@@ -52,9 +58,22 @@ class Meanshifter:
                         else:
                             point = newPoint
                     shifted[x,y] = point
-            output[batch,:,:] = self.group(shifted,inputClass[batch,:,:],output[batch,:,:])
+                    self.makeCluster(inputFeature[batch,:,:,:],(inputClass[batch,:,:] == inputClass[batch,x,y]),point,currentClass,labled,output[batch,:,:])
+                    currentClass += 1
+            #output[batch,:,:] = self.group(shifted,inputClass[batch,:,:],output[batch,:,:])
         return output        
-    
+    @numba.jit
+    def makeCluster(self,points,sameClass,point,classNum,labled,output):
+        h,w = output.shape
+        cosDist = self.cosine_distance(point,points.reshape(20,-1).transpose()).reshape((h,w))
+        #print('done calculating')
+        for i in range(h):
+            for j in range(w):
+                if (sameClass[i,j] and labled[i,j] == 0 and cosDist[i,j] < self.bandwidth):
+                    labled[i,j] = 1
+                    output[i,j] = classNum
+
+
     @numba.jit
     def group(self,points,classes,output):
         currentClass = 1     #class 0 is background
@@ -89,5 +108,5 @@ if (__name__ == '__main__'):
     featureData[:ori.shape[0]] = ori
     featureData = featureData.reshape(2,20,576,1024)
     print('data successfully loaded')
-    output = Meanshifter(0.1,1e-6,0.3).meanshift(classData,featureData)
+    output = Meanshifter(0.2,1e-6,0.4).meanshift(classData,featureData)
     print(output)
