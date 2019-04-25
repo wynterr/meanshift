@@ -18,6 +18,7 @@ class Meanshifter:
         self.minDis4Shift = minDis4Shift      #the threshold of the distance between the new and old center when shifting
         self.maxClass = 200
         self.rootOfClass = np.linspace(0,self.maxClass - 1,self.maxClass).astype(np.int64)    #the root class of each class, for merging classes
+        self.weightThreshold = (1/(self.radius*math.sqrt(2*math.pi))) * np.exp(-0.5*(1)**2)   #the minimum weight to be counted when counting neighbors
 
     def reset(self):
         self.rootOfClass = np.linspace(0,self.maxClass - 1,self.maxClass).astype(np.int64)
@@ -59,7 +60,7 @@ class Meanshifter:
             features = inputFeature[batch,:,:,:]     #only reference here
             classes = inputClass[batch,:,:]
             visit = np.zeros((h,w)).astype(np.int64)       #mark whether the point has been visited
-            prob = np.zeros((h,w,self.maxClass)).astype(np.int64)    #indicate the probility of a point belong to a class
+            prob = np.zeros((h,w,self.maxClass))    #indicate the probility of a point belong to a class
             centerOfClass = np.zeros((self.maxClass,shape[1]))
             for x in range(h):
                 for y in range(w):
