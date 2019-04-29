@@ -82,7 +82,7 @@ class Meanshifter:
                                     neighbors.append(features[:,x1,y1])
                                     prob[x1,y1,currentClass] += 1
                                     visit[x1,y1] = 1
-                        #print(len(neighbors))
+                        print(len(neighbors))
                         neighbors = np.array(neighbors)
                         #calculate the new center after shifting by attaching a weight to each neighbor using a gaussian kernel
                         weights = self.gaussian_kernel(center,neighbors,self.radius)
@@ -145,5 +145,5 @@ if __name__ == '__main__':
     featureData[:ori.shape[0]] = ori
     featureData = featureData.reshape(2,20,576,1024)
     print('data successfully loaded')
-    meanshifter = Meanshifter(1e-1,0.3,1e-8)
+    meanshifter = Meanshifter(1e-1,0.3,1e-6)
     output = meanshifter.meanshift(classData,featureData)

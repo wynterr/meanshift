@@ -9,10 +9,11 @@ class Meanshifter:
         self.bandwidth = bandwidth      #bandwidth of the kernel
         self.minDist2Shift = minDist2Shift      #the min distance for a point shifting to a new one
         self.maxDist2Merge = maxDist2Merge      #the max distance for two class center to merge
+        self.cntL = 0
     
     @numba.jit
     def cosine_distance(self,x,y):
-        return 1-((x * y).sum(axis = 1))/(np.linalg.norm(x)*np.linalg.norm(y)+1e-12)
+        return 1-((x * y).sum(axis = 1))/(np.linalg.norm(x)*np.linalg.norm(y,axis=1)+1e-12)
     
     @numba.jit
     def gaussian_kernel(self,x,y):
@@ -33,45 +34,64 @@ class Meanshifter:
             shifted = np.zeros((h,w,shape[1]))
             allPoints = inputFeature[batch,:,:,:].transpose().reshape(-1,shape[1])
             allClasses = inputClass[batch,:,:].reshape(-1)
-            labled = np.zeros((h,w))     #mark if the point has been assign to a class or not
+            labeld = np.zeros((h,w)).astype(np.int32)     #mark if the point has been assign to a class or not
             print('batch: %d'%batch)
             currentClass = 1     #class 0 is background
             for x in range(h):
                 for y in range(w):
-                    if (labled[x,y] != 0):
+                    if (labeld[x,y] != 0):
                         continue
-                    labled[x,y] = 1
+                    labeld[x,y] = 1
+                    self.cntL += 1
                     output[batch,x,y] = currentClass
                     print("point: %d,%d"%(x,y))
                     if (inputClass[batch,x,y] == 0):
                         continue
                     point = inputFeature[batch,:,x,y]
+                    ori = point
+                    if (x == 0 and y == 507):
+                        logits = (allClasses == inputClass[batch,x,y]) * ((labeld == 0).reshape(-1))
+                        print(logits.sum())
+                        f = open('output.txt','w')
+                        for i in range(len(allPoints)):
+                            if (logits[i]):
+                                f.write(str(self.cosine_distance(point,allPoints[i].reshape(1,-1))))
                     while(True):
                         #calculate weight for each point using the gaussian kernel
                         #shift until the distance of shifting is smaller than the threshold
-                        weights = np.multiply(self.gaussian_kernel(point,allPoints),(allClasses == inputClass[batch,x,y]))      ##only points have same class count
+                        weights = np.multiply(self.gaussian_kernel(point,allPoints),(allClasses == inputClass[batch,x,y]) * ((labeld == 0).reshape(-1)))      ##only points have same class count
                         tiledWeights = np.tile(weights,[shape[1],1])
                         newPoint = np.multiply(tiledWeights.transpose(),allPoints).sum(axis = 0) / weights.sum()
-                        #print("distance: %f"%self.cosine_distance(point,newPoint.reshape(1,-1)))
+                        print("distance: %f"%self.cosine_distance(point,newPoint.reshape(1,-1)))
                         if (self.cosine_distance(point,newPoint.reshape(1,-1)) < self.minDist2Shift):
                             break
                         else:
                             point = newPoint
+                    print("shift dis:%f"%self.cosine_distance(ori,point.reshape(-1,shape[1])))
                     shifted[x,y] = point
-                    self.makeCluster(inputFeature[batch,:,:,:],(inputClass[batch,:,:] == inputClass[batch,x,y]),point,currentClass,labled,output[batch,:,:])
+                    self.makeCluster(inputFeature[batch,:,:,:],(inputClass[batch,:,:] == inputClass[batch,x,y]),point,currentClass,labeld,output[batch,:,:])
                     currentClass += 1
             #output[batch,:,:] = self.group(shifted,inputClass[batch,:,:],output[batch,:,:])
         return output        
     @numba.jit
-    def makeCluster(self,points,sameClass,point,classNum,labled,output):
+    def makeCluster(self,points,sameClass,point,classNum,labeld,output):
         h,w = output.shape
         cosDist = self.cosine_distance(point,points.reshape(20,-1).transpose()).reshape((h,w))
+        print(np.min(cosDist))
         #print('done calculating')
+        cnt = 0
         for i in range(h):
             for j in range(w):
-                if (sameClass[i,j] and labled[i,j] == 0 and cosDist[i,j] < self.bandwidth):
-                    labled[i,j] = 1
+                #print(cosDist[i,j])
+                if (sameClass[i,j] and labeld[i,j] == 0 and cosDist[i,j] < self.bandwidth):
+                    labeld[i,j] = 1
                     output[i,j] = classNum
+                    cnt += 1
+        self.cntL += cnt
+        print(cnt)
+        print("total:%d"%self.cntL)
+        if (cnt == 0):
+            exit(0)
 
 
     @numba.jit
