@@ -1,9 +1,11 @@
 import numpy as np
+import torch
+import random
 from numpy import random as nr
 import math
 import matplotlib.pyplot as plt
 import numba
-from utils import visualize_colored
+from utils import *
 class Meanshifter:
     def __init__(self,bandwidth,minDist2Shift,maxDist2Merge):
         self.bandwidth = bandwidth      #bandwidth of the kernel
@@ -26,6 +28,7 @@ class Meanshifter:
 
     @numba.jit
     def meanshift(self,inputClass,inputFeature):
+        self.cntL = 0
         inputClass[np.isnan(inputClass)] = 0
         inputFeature[np.isnan(inputFeature)] = 0
         shape = inputFeature.shape
@@ -34,22 +37,23 @@ class Meanshifter:
         w = shape[3]
         output = np.zeros((batchSize,h,w)).astype(np.int64)
         for batch in range(batchSize):
+            self.cntL = 0
             shifted = np.zeros((h,w,shape[1]))
             allPoints = inputFeature[batch,:,:,:].transpose().reshape(-1,shape[1])
             inputFeature[batch,:,:,:] = (allPoints / (np.tile(np.linalg.norm(allPoints,axis=1),[shape[1],1]).transpose() + 1e-12)).reshape(w,h,shape[1]).transpose()
             allPoints = inputFeature[batch,:,:,:].transpose().reshape(-1,shape[1])
             allClasses = inputClass[batch,:,:].transpose().reshape(-1)
             labeld = np.zeros((h,w)).astype(np.int32)     #mark if the point has been assign to a class or not
-            #print('batch: %d'%batch)
-            currentClass = self.preProcess(inputFeature[batch,:,:,:],inputClass[batch,:,:],labeld)     #class 0 is background
+            print('batch: %d'%batch)
+            currentClass = 1     #class 0 is background
             for x in range(h):
                 for y in range(w):
                     if (labeld[x,y] != 0):
                         continue
-                    output[batch,x,y] = currentClass
                     print("point: %d,%d"%(x,y))
                     if (inputClass[batch,x,y] == 0):
                         continue
+                    output[batch,x,y] = currentClass
                     point = inputFeature[batch,:,x,y]
                     while(True):
                         #calculate weight for each point using the gaussian kernel
@@ -66,7 +70,7 @@ class Meanshifter:
                     shifted[x,y] = point
                     self.makeCluster(inputFeature[batch,:,:,:],(inputClass[batch,:,:] == inputClass[batch,x,y]),point,currentClass,labeld,output[batch,:,:])
                     currentClass += 1
-        print(currentClass)
+            print(currentClass)
         return output        
     @numba.jit
     def makeCluster(self,points,sameClass,point,classNum,labeld,output):
@@ -82,8 +86,8 @@ class Meanshifter:
                     output[i,j] = classNum
                     cnt += 1
         self.cntL += cnt
-        #print(cnt)
-        #print("total:%d"%self.cntL)
+        print(cnt)
+        print("total:%d"%self.cntL)
 
 
     @numba.jit
@@ -120,6 +124,7 @@ class Meanshifter:
         shift = [-1,0,1]
         currentClass = 1
         for x in range(h):
+            print(x)
             for y in range(w):
                 cnt = 0
                 if (classes[x,y] == 0):
@@ -138,16 +143,30 @@ class Meanshifter:
                 if (cnt < 2):
                     labeld[x,y] = 1
         return currentClass
+    
+    @numba.jit
+    def showWeigtDistribution(self,featureMap,classMap):
+        dim,h,w = featureMap.shape
+        ws = []
+        for i in range(1000):
+            x = random.randint(0,h - 1)
+            y = random.randint(0,w - 1)
+            print(i)
+            weights = np.multiply(self.gaussian_kernel(featureMap[:,x,y],featureMap.transpose().reshape(-1,dim)),(classMap.transpose().reshape(-1) == classMap[x,y]))
+            ws.append(weights.sum())
+        ws.sort()
+        plt.scatter(np.arange(0,len(ws)),ws,s = 3)
+        plt.show()
 
 if (__name__ == '__main__'):
-    classData = np.fromfile('class.txt',dtype = np.int64).reshape(2,576,1024)
-    ori = np.fromfile('feature.txt',dtype = np.float32)
-    featureData = np.zeros(2 * 20 * 576 * 1024)
-    featureData[:ori.shape[0]] = ori
-    featureData = featureData.reshape(2,20,576,1024)
+    inputData = np.load('ipt/input6.npy')
+    classData = np.load('fms/class6.npy')
+    featureData = np.load('fms/instance6.npy')
+    print(featureData.shape)
+    print(inputData.shape)
     print('data successfully loaded')
-    output = Meanshifter(0.2,1e-3,0.4).meanshift(classData,featureData)
+    output = Meanshifter(0.7,1e-3,0.4).meanshift(classData,featureData)
+    np.save('output',output)
     print('done')
-    #output = color_image_fill(classData,featureData)
-    print(output)
-    visualize_colored(output,classData)
+    analyse(output)
+    visualize_colored(torch.from_numpy(inputData),output,classData)
