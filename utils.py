@@ -65,3 +65,76 @@ def analyse(classPred):
             cnt = (classPred[batch] == i).sum()
             plt.scatter([i],[cnt],s=3)
         plt.show()
+
+def calCnt(colormap,totalClass):
+    cnt = np.zeros((totalClass)).astype(np.int64)
+    for i in range(totalClass):
+        cnt[i] = (colormap == i).sum()
+    return cnt
+
+def eatBlk(colorMap,clsOfColor,totalClass):
+    #step 1: break blocks to small connected blocks
+    #step 2: count big background or lane neighbors of each block
+    #step 3: if a block only have one neighbor, it is surrounded by the big neighbor, so the big one "eat" it  
+    h,w = colorMap.shape
+    xDelta = [0,1,0,-1]
+    yDelta = [1,0,-1,0]
+    visited = np.zeros((h,w)).astype(np.int8)
+    cnt = np.zeros((totalClass)).astype(np.int64)
+    for i in range(totalClass):
+        cnt[i] = (colorMap == i).sum()
+
+    for x in range(h):
+        for y in range(w):
+            if (visited[x,y] != 0):
+                continue
+            if ((clsOfColor[colorMap[x,y]] == 1) or colorMap[x,y] == 0): #only break blocks that belong to background or lane
+                #do color fill to find connected block
+                queue = [(x,y)]
+                head = 0
+                tail = 0
+                rootColor = colorMap[x,y]
+                clsOfColor[totalClass] = clsOfColor[rootColor]
+                visited[x,y] = 1
+                currentCnt = 0
+                while (head <= tail):
+                    xNow,yNow = queue[head]
+                    head += 1
+                    currentCnt += 1
+                    colorMap[xNow,yNow] = totalClass
+                    for i in range(4):
+                        xNew = xNow + xDelta[i]
+                        yNew = yNow + yDelta[i]
+                        if (xNew < 0 or xNew >= h or yNew < 0 or yNew >= w):
+                            continue
+                        if (visited[xNew,yNew] == 0 and colorMap[xNew,yNew] == rootColor):
+                            queue.append((xNew,yNew))
+                            visited[xNew,yNew] = 1
+                            tail += 1
+                if (rootColor == 0 and currentCnt > 20000):
+                    colorMap[colorMap == totalClass] = 0
+                else:
+                    totalClass += 1
+    cnt = np.zeros((totalClass)).astype(np.int64)
+    for i in range(totalClass):
+        cnt[i] = (colorMap == i).sum()
+    #find neighbors for each block
+    neighbor = np.zeros((totalClass,totalClass)).astype(np.int8)
+    for x in range(h):
+        for y in range(w):
+            for i in range(4):
+                xNew = x + xDelta[i]
+                yNew = y + yDelta[i]
+                if (xNew < 0 or xNew >= h or yNew < 0 or yNew >= w):
+                    continue
+                if clsOfColor[colorMap[xNew,yNew]] != 2 and cnt[colorMap[xNew,yNew]] > 30000:
+                    neighbor[colorMap[x,y],colorMap[xNew,yNew]] = 1
+    #eat the small block
+    for i in range(1,totalClass):
+        if (neighbor[i].sum() == 1):
+            father = np.argwhere(neighbor[i] == 1)[0,0]
+            if ((clsOfColor[i] == 2 and cnt[i] < 800) or (clsOfColor[i] != 2 and cnt[i] < cnt[father])):
+                colorMap[colorMap == i] = father
+    print(totalClass)
+    return totalClass
+

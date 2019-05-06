@@ -7,11 +7,12 @@ import matplotlib.pyplot as plt
 import numba
 from utils import *
 class Meanshifter:
-    def __init__(self,bandwidth,minDist2Shift,maxDist2Merge):
+    def __init__(self,bandwidth,minDist2Shift,maxDist2Merge,minBlockSize):
         self.bandwidth = bandwidth      #bandwidth of the kernel
         self.minDist2Shift = minDist2Shift      #the min distance for a point shifting to a new one
         self.maxDist2Merge = maxDist2Merge      #the max distance for two class center to merge
         self.cntL = 0
+        self.minBlockSize = minBlockSize     #block with size smaller than this will be merged
     
     @numba.jit
     def cosine_distance(self,x,y):
@@ -39,21 +40,24 @@ class Meanshifter:
         for batch in range(batchSize):
             self.cntL = 0
             shifted = np.zeros((h,w,shape[1]))
-            allPoints = inputFeature[batch,:,:,:].transpose().reshape(-1,shape[1])
-            inputFeature[batch,:,:,:] = (allPoints / (np.tile(np.linalg.norm(allPoints,axis=1),[shape[1],1]).transpose() + 1e-12)).reshape(w,h,shape[1]).transpose()
-            allPoints = inputFeature[batch,:,:,:].transpose().reshape(-1,shape[1])
-            allClasses = inputClass[batch,:,:].transpose().reshape(-1)
+            allPoints = inputFeature[batch,:,:,:].transpose().reshape(-1,shape[1]) #turn feature map to 1D
+            inputFeature[batch,:,:,:] = (allPoints / (np.tile(np.linalg.norm(allPoints,axis=1),[shape[1],1]).transpose() + 1e-12))\
+                                        .reshape(w,h,shape[1]).transpose()   #normalization
+            allPoints = inputFeature[batch,:,:,:].transpose().reshape(-1,shape[1])  #turn feature map to 1D
+            allClasses = inputClass[batch,:,:].transpose().reshape(-1)  #turn class map to 1D
             labeld = np.zeros((h,w)).astype(np.int32)     #mark if the point has been assign to a class or not
+            centers = np.zeros((5000,shape[1]))   #feature center of the class
+            clsOfBlk = np.zeros((5000)).astype(np.int8)  #indicate which class a color block belong to
             print('batch: %d'%batch)
             currentClass = 1     #class 0 is background
-            for x in range(h):
+            xOrder = list(range(h // 2,-1,-1)) + list(range((h // 2) + 1,h))  #reorder x axis,just random trying
+            for x in xOrder:
                 for y in range(w):
-                    if (labeld[x,y] != 0):
+                    if (labeld[x,y] != 0 or currentClass > 250):
                         continue
                     print("point: %d,%d"%(x,y))
                     if (inputClass[batch,x,y] == 0):
                         continue
-                    output[batch,x,y] = currentClass
                     point = inputFeature[batch,:,x,y]
                     while(True):
                         #calculate weight for each point using the gaussian kernel
@@ -68,12 +72,67 @@ class Meanshifter:
                         else:
                             point = newPoint
                     shifted[x,y] = point
-                    self.makeCluster(inputFeature[batch,:,:,:],(inputClass[batch,:,:] == inputClass[batch,x,y]),point,currentClass,labeld,output[batch,:,:])
+                    clsOfBlk[currentClass] = inputClass[batch,x,y]
+                    self.makeCluster(inputFeature[batch,:,:,:],(inputClass[batch,:,:] == inputClass[batch,x,y]),\
+                                        point,currentClass,labeld,output[batch,:,:],centers)
+                    currentClass += 1
+            totalClass = currentClass
+            #eatBlk(output[batch],clsOfBlk,totalClass)
+            ##merge blocks whose distance between centers is smaller than threshold
+            merged = np.zeros((5000)).astype(np.int8)
+            for color1 in range(1,totalClass):
+                for color2 in range(color1 + 1,totalClass):
+                    if ((merged[color2] == 0) and clsOfBlk[color1] == clsOfBlk[color2]\
+                        and self.euclidean_distance(centers[color1],centers[color2].reshape(1,-1)) < self.maxDist2Merge):
+                        output[batch,output[batch] == color2] = color1
+                        merged[color2] = 1
+            cnt = calCnt(output[batch],totalClass)
+            ##merge very small blocks to the block whose cordinate center is closest to its
+            for color1 in range(1,totalClass):
+                if (merged[color1] or cnt[color1] > self.minBlockSize):
+                    continue
+                minDist = 999999
+                index = 0
+                for color2 in range(1,totalClass):
+                    if (color1 != color2 and cnt[color2] > 3000 and clsOfBlk[color1] == clsOfBlk[color2]\
+                        and self.euclidean_distance(centers[color1],centers[color1].reshape(1,-1)) < minDist):
+                        minDist = self.euclidean_distance(centers[color1],centers[color1].reshape(1,-1))
+                        index = color2
+                output[batch,output[batch] == color1] = index
+                cnt[index] += cnt[color1]
+                cnt[color1] = 0
+                merged[color1] = 1
+            totalClass = eatBlk(output[batch],clsOfBlk,totalClass)
+            totalClass = eatBlk(output[batch],clsOfBlk,totalClass)
+            totalClass = eatBlk(output[batch],clsOfBlk,totalClass)
+            cnt = calCnt(output[batch],totalClass)
+            ##merge very small blocks to the block whose cordinate center is closest to its
+            for color1 in range(1,totalClass):
+                if (merged[color1] or cnt[color1] > self.minBlockSize):
+                    continue
+                minDist = 999999
+                index = 0
+                for color2 in range(1,totalClass):
+                    if (color1 != color2 and cnt[color2] > 3000 and clsOfBlk[color1] == clsOfBlk[color2]\
+                        and self.euclidean_distance(centers[color1],centers[color1].reshape(1,-1)) < minDist):
+                        minDist = self.euclidean_distance(centers[color1],centers[color1].reshape(1,-1))
+                        index = color2
+                output[batch,output[batch] == color1] = index
+                cnt[index] += cnt[color1]
+                cnt[color1] = 0
+                merged[color1] = 1
+            ##compress color count
+            currentClass = 1
+            for color in range(1,totalClass):
+                if ((output[batch] == color).sum() != 0):
+                    output[batch,output[batch] == color] = currentClass
                     currentClass += 1
             print(currentClass)
         return output        
+
     @numba.jit
-    def makeCluster(self,points,sameClass,point,classNum,labeld,output):
+    def makeCluster(self,points,sameClass,point,classNum,labeld,output,centers):
+        #gather all points that have a distance smaller than threshold with point and assign them a new color
         h,w = output.shape
         eucDist = self.euclidean_distance(point,points.transpose().reshape(-1,20)).reshape((w,h)).transpose()
         #print('done calculating')
@@ -82,9 +141,12 @@ class Meanshifter:
             for j in range(w):
                 #print(cosDist[i,j])
                 if (sameClass[i,j] and labeld[i,j] == 0 and eucDist[i,j] < self.bandwidth):
+                    centers[classNum] += points[:,i,j]
                     labeld[i,j] = 1
                     output[i,j] = classNum
                     cnt += 1
+        centers[classNum] /= cnt
+        centers[classNum] /= np.linalg.norm(centers[classNum])
         self.cntL += cnt
         print(cnt)
         print("total:%d"%self.cntL)
@@ -159,13 +221,13 @@ class Meanshifter:
         plt.show()
 
 if (__name__ == '__main__'):
-    inputData = np.load('ipt/input6.npy')
-    classData = np.load('fms/class6.npy')
-    featureData = np.load('fms/instance6.npy')
+    inputData = np.load('ipt/input10.npy')
+    classData = np.load('fms/class10.npy')
+    featureData = np.load('fms/instance10.npy')
     print(featureData.shape)
     print(inputData.shape)
     print('data successfully loaded')
-    output = Meanshifter(0.7,1e-3,0.4).meanshift(classData,featureData)
+    output = Meanshifter(1.1,1e-3,1.1,500).meanshift(classData,featureData)
     np.save('output',output)
     print('done')
     analyse(output)

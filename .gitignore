@@ -4,3 +4,4 @@ opt
 result*
 union*
 *.npy
+__pycache__
