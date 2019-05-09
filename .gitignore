@@ -5,3 +5,6 @@ result*
 union*
 *.npy
 __pycache__
+download
+diff
+upload
